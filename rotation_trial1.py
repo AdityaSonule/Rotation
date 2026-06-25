@@ -26,53 +26,50 @@ class Bloch:
     n: np.ndarray  # unit rotation axis, shape (3,): [n_x, n_y, n_z]
     theta: float  # rotation angle
 
+    def __init__(self, alpha: float, n: np.ndarray, theta: float):
+        self.alpha = alpha
+        self.n = np.array(n, dtype=float)
+        self.theta = theta
+
 
 def to_bloch(g: np.ndarray) -> Bloch:
     """Recover the Bloch form (alpha, n, theta) of a 2x2 unitary `g`."""
 
     g = np.array(g, dtype=DTYPE)
 
-    a = g[0, 0]
-    b = g[0, 1]
-    c = g[1, 0]
-    d = g[1, 1]
-
-    det = a * d - b * c
-
-    alpha = np.angle(det) / 2.0
-
-    g = np.exp(-1j * alpha) * g
-
-    cos_half_theta = np.real(np.trace(g)) / 2.0
-    cos_half_theta = np.clip(cos_half_theta, -1.0, 1.0)
-
-    theta = 2.0 * np.arccos(cos_half_theta)
-
     X = np.array([[0, 1], [1, 0]], dtype=DTYPE)
     Y = np.array([[0, -1j], [1j, 0]], dtype=DTYPE)
     Z = np.array([[1, 0], [0, -1]], dtype=DTYPE)
 
-    denom = 2.0 * np.sin(theta / 2.0)
+    det = np.linalg.det(g)
+    arg = np.angle(det)
+    alpha = arg / 2.0
 
-    if np.isclose(denom, 0.0):
-        n = np.array([1.0, 0.0, 0.0], dtype=float)
-    else:
-        n_x = -np.imag(np.trace(X @ g)) / denom
-        n_y = -np.imag(np.trace(Y @ g)) / denom
-        n_z = -np.imag(np.trace(Z @ g)) / denom
+    phase = np.exp(-1j * alpha)
+    g = phase * g
 
-        n = np.array([n_x, n_y, n_z], dtype=float)
+    tr = np.trace(g)
+    cos_half_theta = np.real(tr) / 2.0
+    cos_half_theta = np.clip(cos_half_theta, -1.0, 1.0)
 
-        norm = np.linalg.norm(n)
-        if not np.isclose(norm, 0.0):
-            n = n / norm
+    theta = 2.0 * np.arccos(cos_half_theta)
+    sin_half_theta = np.sin(theta / 2.0)
 
-    b = Bloch()
-    b.alpha = alpha
-    b.n = n
-    b.theta = theta
+    if np.isclose(sin_half_theta, 0.0):
+        n = np.array([1.0, 0.0, 0.0])
+        return Bloch(alpha, n, theta)
 
-    return b
+    n_x = -np.imag(np.trace(X @ g)) / (2.0 * sin_half_theta)
+    n_y = -np.imag(np.trace(Y @ g)) / (2.0 * sin_half_theta)
+    n_z = -np.imag(np.trace(Z @ g)) / (2.0 * sin_half_theta)
+
+    n = np.array([n_x, n_y, n_z], dtype=float)
+
+    norm = np.linalg.norm(n)
+    if not np.isclose(norm, 0.0):
+        n = n / norm
+
+    return Bloch(alpha, n, theta)
 
 
 # n1, n2 are two orthogonal Bloch-sphere axes (n1 . n2 == 0)
@@ -97,46 +94,63 @@ def n1n2n1_angles(b: Bloch) -> tuple[float, float, float, float]:
     the orthonormal frame defined above. Returns (alpha, beta, gamma, global_phase).
     """
 
-    half_theta = b.theta / 2.0
+    def wrap_angle(x: float) -> float:
+        return x % TWO_PI
 
-    cos_half_theta = np.cos(half_theta)
-    sin_half_theta = np.sin(half_theta)
+    def skew(v: np.ndarray) -> np.ndarray:
+        x, y, z = v
+        return np.array([
+            [0.0, -z, y],
+            [z, 0.0, -x],
+            [-y, x, 0.0]
+        ], dtype=float)
 
-    # Components of the SU(2) rotation in the {a1, a2, a3} frame.
-    #
-    # Rotation part:
-    #   cos(theta/2) I - i sin(theta/2) (n . sigma)
-    #
-    # So:
-    #   w = cos(theta/2)
-    #   vector = n sin(theta/2)
-    #
-    # Then project vector onto a1, a2, a3.
-    w = cos_half_theta
-    x = sin_half_theta * np.dot(b.n, a1)
-    y = sin_half_theta * np.dot(b.n, a2)
-    z = sin_half_theta * np.dot(b.n, a3)
+    def rotation_matrix(axis: np.ndarray, angle: float) -> np.ndarray:
+        axis = np.array(axis, dtype=float)
+        axis = axis / np.linalg.norm(axis)
 
-    # From the formula:
-    #   w = cos(beta) cos(gamma + alpha)
-    #   x = cos(beta) sin(gamma + alpha)
-    #   y = sin(beta) cos(gamma - alpha)
-    #   z = sin(beta) sin(gamma - alpha)
-    #
-    # Define:
-    #   mu = gamma + alpha
-    #   delta = gamma - alpha
-    mu = np.arctan2(x, w)
-    delta = np.arctan2(z, y)
+        K = skew(axis)
+        I3 = np.eye(3)
 
-    beta = np.arctan2(np.hypot(y, z), np.hypot(w, x))
+        return (
+            np.cos(angle) * I3
+            + (1.0 - np.cos(angle)) * np.outer(axis, axis)
+            + np.sin(angle) * K
+        )
 
-    alpha = (mu - delta) / 2.0
-    gamma = (mu + delta) / 2.0
+    n = np.array(b.n, dtype=float)
+    n = n / np.linalg.norm(n)
 
-    alpha = np.mod(alpha, TWO_PI)
-    beta = np.mod(beta, TWO_PI)
-    gamma = np.mod(gamma, TWO_PI)
+    R_global = rotation_matrix(n, b.theta)
+
+    e1 = a1 / np.linalg.norm(a1)
+    e2 = a2 / np.linalg.norm(a2)
+    e3 = a3 / np.linalg.norm(a3)
+
+    B = np.column_stack([e1, e2, e3])
+
+    R = B.T @ R_global @ B
+
+    cos_beta = np.clip(R[0, 0], -1.0, 1.0)
+    beta = np.arccos(cos_beta)
+    sin_beta = np.sin(beta)
+
+    if not np.isclose(sin_beta, 0.0):
+        gamma = np.arctan2(R[0, 1], R[0, 2])
+        alpha = np.arctan2(R[1, 0], -R[2, 0])
+    else:
+        gamma = 0.0
+
+        if cos_beta > 0:
+            beta = 0.0
+            alpha = np.arctan2(R[2, 1], R[1, 1])
+        else:
+            beta = np.pi
+            alpha = np.arctan2(R[1, 2], R[1, 1])
+
+    alpha = wrap_angle(alpha)
+    beta = wrap_angle(beta)
+    gamma = wrap_angle(gamma)
 
     return alpha, beta, gamma, b.alpha
 
@@ -154,19 +168,21 @@ def approx_angle_with_tolerance(angle: float, tolerance: float) -> int:
         min(|a - b|, TWO_PI - |a - b|) (so 0.01 and 2*pi - 0.01 count as close).
     """
 
-    target = np.mod(angle, TWO_PI)
+    def wrap_angle(x: float) -> float:
+        return x % TWO_PI
 
     def angular_distance(a: float, b: float) -> float:
         diff = abs(a - b)
         return min(diff, TWO_PI - diff)
 
+    target = wrap_angle(angle)
+
     if angular_distance(0.0, target) <= tolerance:
         return 0
 
     k = 1
-
     while True:
-        candidate = np.mod(k * LAMBDA_PI, TWO_PI)
+        candidate = wrap_angle(k * LAMBDA_PI)
 
         if angular_distance(candidate, target) <= tolerance:
             return k
@@ -201,7 +217,9 @@ def decompose_2x2(u: np.ndarray, tolerance: float) -> tuple[int, int, int]:
       3. Return (k, l, m).
     """
 
-    alpha, beta, gamma, _global_phase = n1n2n1_angles(to_bloch(u))
+    b = to_bloch(u)
+
+    alpha, beta, gamma, _global_phase = n1n2n1_angles(b)
 
     k = approx_angle_with_tolerance(alpha, tolerance)
     l = approx_angle_with_tolerance(beta, tolerance)

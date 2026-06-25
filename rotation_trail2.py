@@ -29,23 +29,16 @@ class Bloch:
 
 def to_bloch(g: np.ndarray) -> Bloch:
     """Recover the Bloch form (alpha, n, theta) of a 2x2 unitary `g`."""
-
-    g = np.array(g, dtype=DTYPE)
-
     a = g[0, 0]
     b = g[0, 1]
     c = g[1, 0]
     d = g[1, 1]
-
     det = a * d - b * c
 
     alpha = np.angle(det) / 2.0
-
     g = np.exp(-1j * alpha) * g
 
-    cos_half_theta = np.real(np.trace(g)) / 2.0
-    cos_half_theta = np.clip(cos_half_theta, -1.0, 1.0)
-
+    cos_half_theta = np.clip(np.real(np.trace(g)) / 2.0, -1.0, 1.0)
     theta = 2.0 * np.arccos(cos_half_theta)
 
     X = np.array([[0, 1], [1, 0]], dtype=DTYPE)
@@ -53,33 +46,27 @@ def to_bloch(g: np.ndarray) -> Bloch:
     Z = np.array([[1, 0], [0, -1]], dtype=DTYPE)
 
     denom = 2.0 * np.sin(theta / 2.0)
-
     if np.isclose(denom, 0.0):
         n = np.array([1.0, 0.0, 0.0], dtype=float)
     else:
         n_x = -np.imag(np.trace(X @ g)) / denom
         n_y = -np.imag(np.trace(Y @ g)) / denom
         n_z = -np.imag(np.trace(Z @ g)) / denom
-
         n = np.array([n_x, n_y, n_z], dtype=float)
-
-        norm = np.linalg.norm(n)
-        if not np.isclose(norm, 0.0):
-            n = n / norm
+        n = n / np.linalg.norm(n)
 
     b = Bloch()
     b.alpha = alpha
     b.n = n
     b.theta = theta
-
     return b
 
 
 # n1, n2 are two orthogonal Bloch-sphere axes (n1 . n2 == 0)
 # TODO: fill in the two orthogonal rotation axes (each a length-3
 # unit vector [x, y, z])
-n1 = np.array([1.0, 0.0, 0.0])
-n2 = np.array([0.0, 1.0, 0.0])
+n1 = np.array([np.nan, np.nan, np.nan])
+n2 = np.array([np.nan, np.nan, np.nan])
 
 # frame derived from the axes (given)
 # take the dot product of the Bloch axis with these
@@ -96,47 +83,26 @@ def n1n2n1_angles(b: Bloch) -> tuple[float, float, float, float]:
     where Ra(angle) is a rotation by `angle` about axis a, and {a1, a2, a3} is
     the orthonormal frame defined above. Returns (alpha, beta, gamma, global_phase).
     """
-
     half_theta = b.theta / 2.0
-
     cos_half_theta = np.cos(half_theta)
     sin_half_theta = np.sin(half_theta)
 
-    # Components of the SU(2) rotation in the {a1, a2, a3} frame.
-    #
-    # Rotation part:
-    #   cos(theta/2) I - i sin(theta/2) (n . sigma)
-    #
-    # So:
-    #   w = cos(theta/2)
-    #   vector = n sin(theta/2)
-    #
-    # Then project vector onto a1, a2, a3.
+    # rotation quaternion for the physical SU(2) part in the a1/a2/a3 frame
     w = cos_half_theta
     x = sin_half_theta * np.dot(b.n, a1)
     y = sin_half_theta * np.dot(b.n, a2)
     z = sin_half_theta * np.dot(b.n, a3)
 
-    # From the formula:
-    #   w = cos(beta) cos(gamma + alpha)
-    #   x = cos(beta) sin(gamma + alpha)
-    #   y = sin(beta) cos(gamma - alpha)
-    #   z = sin(beta) sin(gamma - alpha)
-    #
-    # Define:
-    #   mu = gamma + alpha
-    #   delta = gamma - alpha
-    mu = np.arctan2(x, w)
-    delta = np.arctan2(z, y)
+    alpha_plus_gamma = np.arctan2(x, w)
+    alpha_minus_gamma = np.arctan2(z, y)
+    beta = 2.0 * np.arctan2(np.hypot(y, z), np.hypot(w, x))
 
-    beta = np.arctan2(np.hypot(y, z), np.hypot(w, x))
+    alpha = alpha_plus_gamma + alpha_minus_gamma
+    gamma = alpha_plus_gamma - alpha_minus_gamma
 
-    alpha = (mu - delta) / 2.0
-    gamma = (mu + delta) / 2.0
-
-    alpha = np.mod(alpha, TWO_PI)
-    beta = np.mod(beta, TWO_PI)
-    gamma = np.mod(gamma, TWO_PI)
+    alpha = np.mod(alpha + TWO_PI, TWO_PI)
+    beta = np.mod(beta + TWO_PI, TWO_PI)
+    gamma = np.mod(gamma + TWO_PI, TWO_PI)
 
     return alpha, beta, gamma, b.alpha
 
@@ -153,24 +119,17 @@ def approx_angle_with_tolerance(angle: float, tolerance: float) -> int:
       * the angular distance between two wrapped angles a, b is
         min(|a - b|, TWO_PI - |a - b|) (so 0.01 and 2*pi - 0.01 count as close).
     """
-
     target = np.mod(angle, TWO_PI)
 
     def angular_distance(a: float, b: float) -> float:
         diff = abs(a - b)
         return min(diff, TWO_PI - diff)
 
-    if angular_distance(0.0, target) <= tolerance:
-        return 0
-
     k = 1
-
     while True:
         candidate = np.mod(k * LAMBDA_PI, TWO_PI)
-
         if angular_distance(candidate, target) <= tolerance:
             return k
-
         k += 1
 
 
@@ -200,11 +159,8 @@ def decompose_2x2(u: np.ndarray, tolerance: float) -> tuple[int, int, int]:
 
       3. Return (k, l, m).
     """
-
     alpha, beta, gamma, _global_phase = n1n2n1_angles(to_bloch(u))
-
     k = approx_angle_with_tolerance(alpha, tolerance)
     l = approx_angle_with_tolerance(beta, tolerance)
     m = approx_angle_with_tolerance(gamma, tolerance)
-
     return k, l, m
