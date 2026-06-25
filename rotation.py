@@ -29,7 +29,36 @@ class Bloch:
 
 def to_bloch(g: np.ndarray) -> Bloch:
     """Recover the Bloch form (alpha, n, theta) of a 2x2 unitary `g`."""
-    raise NotImplementedError("to_bloch is not implemented yet")
+    a = g[0, 0]
+    b = g[0, 1]
+    c = g[1, 0]
+    d = g[1, 1]
+    det = a * d - b * c
+
+    alpha = np.angle(det) / 2.0
+    g = np.exp(-1j * alpha) * g
+
+    cos_half_theta = np.clip(np.real(np.trace(g)) / 2.0, -1.0, 1.0)
+    theta = 2.0 * np.arccos(cos_half_theta)
+
+    X = np.array([[0, 1], [1, 0]], dtype=DTYPE)
+    Y = np.array([[0, -1j], [1j, 0]], dtype=DTYPE)
+    Z = np.array([[1, 0], [0, -1]], dtype=DTYPE)
+
+    denom = 2.0 * np.sin(theta / 2.0)
+    if np.isclose(denom, 0.0):
+        n = np.array([1.0, 0.0, 0.0], dtype=float)
+    else:
+        n_x = -np.imag(np.trace(X @ g)) / denom
+        n_y = -np.imag(np.trace(Y @ g)) / denom
+        n_z = -np.imag(np.trace(Z @ g)) / denom
+        n = np.array([n_x, n_y, n_z], dtype=float)
+
+    b = Bloch()
+    b.alpha = alpha
+    b.n = n
+    b.theta = theta
+    return b
 
 
 # n1, n2 are two orthogonal Bloch-sphere axes (n1 . n2 == 0)
